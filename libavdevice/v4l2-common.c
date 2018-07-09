@@ -112,3 +112,36 @@ enum AVCodecID ff_fmt_v4l2codec(uint32_t v4l2_fmt)
 
     return AV_CODEC_ID_NONE;
 }
+
+int make_uvc_xu_query(int fd, int unit_id, uint8_t selector, uint8_t query, uint8_t * data) {
+  struct uvc_xu_control_query uvc_ctrl;
+  uint16_t len;
+
+  if (fd < 0) {
+    return -1;
+  }
+
+  uvc_ctrl.unit = unit_id;
+  uvc_ctrl.selector = selector;
+
+  uvc_ctrl.query = UVC_GET_LEN;
+  uvc_ctrl.size = sizeof(len);
+  uvc_ctrl.data = (uint8_t *) &len;
+
+  if (ioctl (fd, UVCIOC_CTRL_QUERY, &uvc_ctrl) < 0) {
+    return -1;
+  }
+
+  if (query == UVC_GET_LEN) {
+    *((uint16_t *) data) = len;
+  } else {
+    uvc_ctrl.query = query;
+    uvc_ctrl.size = len;
+    uvc_ctrl.data = data;
+    if (ioctl(fd, UVCIOC_CTRL_QUERY, &uvc_ctrl) < 0) {
+      return -1;
+    }
+  }
+
+  return 0;
+}
