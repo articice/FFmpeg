@@ -68,6 +68,7 @@ static const int desired_video_buffers = 256;
 #define V4L_TS_CONVERT_READY V4L_TS_DEFAULT
 
 
+#define UVC_H264_UNIT_ID_C920 12
 #define UVC_IFPERIOD_DEFAULT 10000
 #define UVC_BITRATE_DEFAULT 3000000
 
@@ -777,7 +778,7 @@ static int v4l2_set_parameters(AVFormatContext *ctx)
       memset(&probe, 0, sizeof(probe));
 
       if (s->iframe_interval != UVC_IFPERIOD_DEFAULT) {
-        probe.wIFramePeriod = s->iframe_interval / 2;
+        probe.wIFramePeriod = s->iframe_interval;
       }
 
       if (s->initial_bitrate != UVC_BITRATE_DEFAULT) {
@@ -789,13 +790,26 @@ static int v4l2_set_parameters(AVFormatContext *ctx)
       UVC_H264_BMHINTS_FRAME_INTERVAL;
 
       // Start negotiation
-      make_uvc_xu_query(s->fd, s->h264_unit_id, UVCX_VIDEO_CONFIG_PROBE, UVC_SET_CUR, (uint8_t *) &probe);
+      ret = make_uvc_xu_query(s->fd, s->h264_unit_id, UVCX_VIDEO_CONFIG_PROBE, UVC_SET_CUR, (uint8_t *) &probe);
 
+      if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR, "UVC H264 Probe SET_CUR failed\n");
+        return ret;
+      }
       // Get an offer from device
-      make_uvc_xu_query(s->fd, s->h264_unit_id, UVCX_VIDEO_CONFIG_PROBE, UVC_GET_CUR, (uint8_t *) &probe);
+      ret = make_uvc_xu_query(s->fd, s->h264_unit_id, UVCX_VIDEO_CONFIG_PROBE, UVC_GET_CUR, (uint8_t *) &probe);
+
+      if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR, "UVC H264 Probe GET_CUR failed\n");
+        return ret;
+      }
 
       // Finish negotiation
-      make_uvc_xu_query(s->fd, s->h264_unit_id, UVCX_VIDEO_CONFIG_COMMIT, UVC_SET_CUR, (uint8_t *) &probe);
+      ret = make_uvc_xu_query(s->fd, s->h264_unit_id, UVCX_VIDEO_CONFIG_COMMIT, UVC_SET_CUR, (uint8_t *) &probe);
+      if (ret < 0) {
+        av_log(ctx, AV_LOG_ERROR, "UVC H264 Commit SET_CUR failed\n");
+        return ret;
+      }
     }
     return 0;
 }
@@ -1157,7 +1171,7 @@ static const AVOption options[] = {
     { "abs",          "use absolute timestamps (wall clock)",                     OFFSET(ts_mode),      AV_OPT_TYPE_CONST,  {.i64 = V4L_TS_ABS      }, 0, 2, DEC, "timestamps" },
     { "mono2abs",     "force conversion from monotonic to absolute timestamps",   OFFSET(ts_mode),      AV_OPT_TYPE_CONST,  {.i64 = V4L_TS_MONO2ABS }, 0, 2, DEC, "timestamps" },
     { "use_libv4l2",  "use libv4l2 (v4l-utils) conversion functions",             OFFSET(use_libv4l2),  AV_OPT_TYPE_BOOL,   {.i64 = 0}, 0, 1, DEC },
-    { "h264_unit_id",  "H264 Extension Unit ID. Enables UVC H264 settings",   OFFSET(h264_unit_id),  AV_OPT_TYPE_INT,   {.i64 = -1}, -1, INT_MAX, DEC },
+    { "h264_unit_id",  "H264 Extension Unit ID. Enables UVC H264 settings (-1 disables)",   OFFSET(h264_unit_id),  AV_OPT_TYPE_INT,   {.i64 = UVC_H264_UNIT_ID_C920}, -1, INT_MAX, DEC },
     { "iframe_interval",  "(UVC H264) set interval (in ms) between I-frames",   OFFSET(iframe_interval),  AV_OPT_TYPE_INT,   {.i64 = UVC_IFPERIOD_DEFAULT}, 0, INT_MAX, DEC },
     { "bitrate",  "(UVC H264) set bitrate for H264 encoding",   OFFSET(initial_bitrate),  AV_OPT_TYPE_INT,   {.i64 = UVC_BITRATE_DEFAULT}, 0, INT_MAX, DEC },
     { NULL },
