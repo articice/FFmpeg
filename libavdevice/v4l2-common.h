@@ -90,7 +90,9 @@ typedef enum _uvcx_control_selector_t
   UVCX_QP_STEPS_LAYERS = 0x0F,
 } uvcx_control_selector_t;
 
-
+/*
+ * h264 probe commit struct (uvc 1.1)
+ */
 typedef struct _uvcx_video_config_probe_commit_t
 {
   uint32_t dwFrameInterval;
@@ -123,6 +125,12 @@ typedef struct _uvcx_video_config_probe_commit_t
   uint8_t bSpatialLayerRatio;
   uint16_t wLeakyBucketSize;
 } __attribute__((packed)) uvcx_video_config_probe_commit_t;
+
+/* encoder reset */
+typedef struct _uvcx_encoder_reset
+{
+  uint16_t	wLayerID;
+} __attribute__((__packed__)) uvcx_encoder_reset;
 
 extern const struct fmt_map ff_fmt_conversion_table[];
 

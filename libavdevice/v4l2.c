@@ -72,6 +72,8 @@ static const int desired_video_buffers = 256;
 #define UVC_IFPERIOD_DEFAULT 10000
 #define UVC_BITRATE_DEFAULT 3000000
 
+#define STREAMMUX_H264          (1 << 0) | (1 << 1)
+
 struct video_data {
     AVClass *class;
     int fd;
@@ -771,7 +773,7 @@ static int v4l2_set_parameters(AVFormatContext *ctx)
         av_log(ctx, AV_LOG_WARNING, "Time per frame unknown\n");
 
     /** try using uvcvideo params **/
-    if (ctx->video_codec_id == AV_CODEC_ID_H264 && s->h264_unit_id >= 0) {
+    if (s->h264_unit_id >= 0) {
       uvcx_video_config_probe_commit_t probe;
 
       // Fill the probe. 0 means parameter is not negotiated.
@@ -788,6 +790,40 @@ static int v4l2_set_parameters(AVFormatContext *ctx)
       // Hints describe which parameters should remain unchanged
       probe.bmHints = UVC_H264_BMHINTS_RESOLUTION | UVC_H264_BMHINTS_PROFILE |
       UVC_H264_BMHINTS_FRAME_INTERVAL;
+
+      // enable H264 muxed with MJPEG
+      if (ctx->video_codec_id == AV_CODEC_ID_MJPEG) {
+        av_log(ctx, AV_LOG_INFO, "UVC: H264 encoder reset\n");
+        uvcx_encoder_reset encoder_reset_req = {0};
+        ret = make_uvc_xu_query(s->fd, s->h264_unit_id, UVCX_ENCODER_RESET, UVC_SET_CUR, (uint8_t *) &encoder_reset_req);
+        if (ret < 0) {
+          av_log(ctx, AV_LOG_ERROR, "UVC H264 ENCODER_RESET failed\n");
+          return ret;
+        }
+
+        // get default values (safe)
+        ret = make_uvc_xu_query(s->fd, s->h264_unit_id, UVCX_VIDEO_CONFIG_PROBE, UVC_GET_DEF, (uint8_t *) &probe);
+        if (ret < 0) {
+          av_log(ctx, AV_LOG_ERROR, "UVC H264 GET_DEF failed\n");
+          return ret;
+        }
+
+        av_log(ctx, AV_LOG_INFO, "UVC: setting muxed H264 stream in MJPEG container\n");
+        probe.bStreamMuxOption = STREAMMUX_H264;
+
+        /*set resolution*/
+        probe.wWidth = s->width;
+        probe.wHeight = s->height;
+
+        /*set frame rate in 100ns units*/
+        uint32_t frame_interval = (tpf->numerator * 1000000000LL / tpf->denominator)/100;
+        probe.dwFrameInterval = frame_interval;
+
+
+        //overwrite codec id for H264 demuxed from MJPEG
+        //TODO probably better done in a bitstream filter
+        //ctx->video_codec_id = AV_CODEC_ID_H264;
+      }
 
       // Start negotiation
       ret = make_uvc_xu_query(s->fd, s->h264_unit_id, UVCX_VIDEO_CONFIG_PROBE, UVC_SET_CUR, (uint8_t *) &probe);
@@ -811,6 +847,7 @@ static int v4l2_set_parameters(AVFormatContext *ctx)
         return ret;
       }
     }
+
     return 0;
 }
 
@@ -993,6 +1030,9 @@ static int v4l2_read_header(AVFormatContext *ctx)
 
     if ((res = v4l2_set_parameters(ctx)) < 0)
         goto fail;
+
+    //overwrite codec ID if it was changed when XU was initialized
+    codec_id = ctx->video_codec_id;
 
     st->codecpar->format = ff_fmt_v4l2ff(desired_format, codec_id);
     if (st->codecpar->format != AV_PIX_FMT_NONE)
