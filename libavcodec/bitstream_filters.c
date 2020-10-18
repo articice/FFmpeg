@@ -57,6 +57,7 @@ extern const AVBitStreamFilter ff_vp9_metadata_bsf;
 extern const AVBitStreamFilter ff_vp9_raw_reorder_bsf;
 extern const AVBitStreamFilter ff_vp9_superframe_bsf;
 extern const AVBitStreamFilter ff_vp9_superframe_split_bsf;
+extern const AVBitStreamFilter ff_mjpeg_demux_h264_bsf;
 
 #include "libavcodec/bsf_list.c"
 
