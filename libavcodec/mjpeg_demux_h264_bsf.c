@@ -34,6 +34,124 @@
 #include "bsf.h"
 #include "bytestream.h"
 #include "mjpeg.h"
+#include "h264.h"
+#include "cbs.h"
+
+typedef struct H264DemuxContext {
+//    CodedBitstreamContext *input;
+    CodedBitstreamContext *output;
+
+    CodedBitstreamFragment *access_unit;
+
+    AVCodecParameters *par_out;
+
+    uint8_t *h264_last_IDR;             // last IDR frame retrieved from uvc h264 stream
+    int h264_last_IDR_size;             // last IDR frame size
+    uint8_t *h264_SPS;                  // h264 SPS info
+    uint16_t h264_SPS_size;             // SPS size
+    uint8_t *h264_PPS;                  // h264 PPS info
+    uint16_t h264_PPS_size;             // PPS size
+} H264DemuxContext;
+
+/*
+ * check buff (*buff) of size (size) for NALU type (type)
+ * args:
+ *    type - NALU type
+ *    buff - buffer with MJPG uvc frame containing h264 data
+ *    size - buffer size
+ *
+ * asserts:
+ *    buff is not null
+ *
+ * returns: buffer pointer to NALU type data if found
+ *          NULL if not found
+ */
+static uint8_t* check_NALU(uint8_t type, uint8_t *buff, int size)
+{
+  /*asserts*/
+  assert(buff != NULL);
+
+  uint8_t *sp = buff;
+  uint8_t *nal = NULL;
+  //search for NALU of type
+  for(sp = buff; sp < buff + size - 5; ++sp)
+  {
+    if(sp[0] == 0x00 &&
+       sp[1] == 0x00 &&
+       sp[2] == 0x00 &&
+       sp[3] == 0x01 &&
+       (sp[4] & 0x1F) == type)
+    {
+      /*found it*/
+      nal = sp + 4;
+      break;
+    }
+  }
+
+  return nal;
+}
+
+/*
+ * parses a buff (*buff) of size (size) for NALU type (type)
+ * args:
+ *    type - NALU type
+ *    NALU - pointer to pointer to NALU data
+ *    buff - pointer to buffer containing h264 data muxed in MJPG container
+ *    size - buff size
+ *
+ * asserts:
+ *    buff is not null
+ *
+ * returns: NALU size and sets pointer (NALU) to NALU data
+ *          -1 if no NALU found
+ */
+static int parse_NALU(uint8_t type, uint8_t **NALU, uint8_t *buff, int size)
+{
+  /*asserts*/
+  assert(buff != NULL);
+
+  int nal_size = 0;
+  uint8_t *sp = NULL;
+
+  //search for NALU of type
+  uint8_t *nal = check_NALU(type, buff, size);
+  if(nal == NULL)
+  {
+    fprintf(stderr, "V4L2_CORE: (uvc H264) could not find NALU of type %i in buffer\n", type);
+    return -1;
+  }
+
+  //search for end of NALU
+  for(sp = nal; sp < buff + size - 4; ++sp)
+  {
+    if(sp[0] == 0x00 &&
+       sp[1] == 0x00 &&
+       sp[2] == 0x00 &&
+       sp[3] == 0x01)
+    {
+      nal_size = sp - nal;
+      break;
+    }
+  }
+
+  if(!nal_size)
+    nal_size = buff + size - nal;
+
+  *NALU = calloc(nal_size, sizeof(uint8_t));
+  if(*NALU == NULL)
+  {
+    fprintf(stderr, "V4L2_CORE: FATAL memory allocation failure (parse_NALU): %s\n", strerror(errno));
+    exit(-1);
+  }
+  memcpy(*NALU, nal, nal_size);
+
+  //char test_filename2[20];
+  //snprintf(test_filename2, 20, "frame_nalu-%i.raw", type);
+  //SaveBuff (test_filename2, nal_size, *NALU);
+
+  return nal_size;
+}
+
 
 
 static int mjpeg_demux_h264(AVBSFContext *ctx, AVPacket *out)
@@ -143,7 +261,7 @@ static int mjpeg_demux_h264(AVBSFContext *ctx, AVPacket *out)
       sp += 4; /*APP4 marker + length*/
 
       if(length != max_seg_size) {
-        av_log(ctx, AV_LOG_ERROR, "V4L2_CORE: segment length is %i (demux_uvcH264)\n", length);
+        av_log(ctx, AV_LOG_DEBUG, "V4L2_CORE: segment length is %i (demux_uvcH264)\n", length);
       }
 
       /*copy the segment to h264 buffer*/
@@ -167,6 +285,48 @@ static int mjpeg_demux_h264(AVBSFContext *ctx, AVPacket *out)
   exit:
     out->size = (ph264 - h264_data);
     av_packet_free(&in);
+
+    if (!ctx->par_out->extradata) {
+      H264DemuxContext *vd = ctx->priv_data;
+      if(vd->h264_SPS == NULL)
+      {
+        vd->h264_SPS_size = parse_NALU( 7, &vd->h264_SPS,
+                                        out->data,
+                                        (int) out->size);
+
+        if(vd->h264_SPS_size <= 0 || vd->h264_SPS == NULL)
+        {
+          av_log(ctx, AV_LOG_ERROR, "V4L2_CORE: (uvc H264) Could not find SPS (NALU type: 7)\n");
+          return 0; //E_NO_DATA;
+        }
+        else
+          av_log(ctx, AV_LOG_DEBUG, "V4L2_CORE: (uvc H264) stored SPS %i bytes of data\n",
+                 vd->h264_SPS_size);
+      }
+
+      if(vd->h264_PPS == NULL)
+      {
+        vd->h264_PPS_size = parse_NALU( 8, &vd->h264_PPS,
+                                        out->data,
+                                        (int) out->size);
+
+        if(vd->h264_PPS_size <= 0 || vd->h264_PPS == NULL)
+        {
+          av_log(ctx, AV_LOG_ERROR, "Could not find PPS (NALU type: 8)\n");
+          return 0; //E_NO_DATA
+        }
+        else //if(verbosity > 0)
+          av_log(ctx, AV_LOG_DEBUG, "V4L2_CORE: (uvc H264) stored PPS %i bytes of data\n",
+                 vd->h264_PPS_size);
+      }
+
+      ctx->par_out->extradata_size = vd->h264_SPS_size + vd->h264_PPS_size + 1;
+      ctx->par_out->extradata = malloc(ctx->par_out->extradata_size);
+      memcpy(ctx->par_out->extradata, vd->h264_SPS, vd->h264_SPS_size);
+      memcpy(ctx->par_out->extradata+vd->h264_SPS_size, vd->h264_PPS, vd->h264_PPS_size);
+
+    }
+
     return 0;
 
   fail:
@@ -177,20 +337,34 @@ static int mjpeg_demux_h264(AVBSFContext *ctx, AVPacket *out)
 
 static int mjpeg_demux_h264_init(AVBSFContext *bsf)
 {
-//  int err, i;
+  H264DemuxContext *ctx = bsf->priv_data;
+
+  int err; //, i;
 //
 //  err = ff_cbs_init(&ctx->input, AV_CODEC_ID_MJPEG, bsf);
 //  if (err < 0)
 //    return err;
 //
-//  err = ff_cbs_init(&ctx->output, AV_CODEC_ID_H264, bsf);
-//  if (err < 0)
-//    return err;
+  err = ff_cbs_init(&ctx->output, AV_CODEC_ID_H264, bsf);
+  if (err < 0)
+    return err;
+
+  //ctx->
 
   bsf->par_out->codec_type = AVMEDIA_TYPE_VIDEO;
-  bsf->par_out->codec_tag = avcodec_pix_fmt_to_codec_tag(AV_PIX_FMT_YUV420P); //TODO fix hardcode
+  bsf->par_out->codec_tag = 0; //avcodec_pix_fmt_to_codec_tag(AV_PIX_FMT_YUV420P); //TODO fix hardcode
   bsf->par_out->codec_id = AV_CODEC_ID_H264;
-  bsf->par_out->format = AV_PIX_FMT_YUV420P; //TODO fix hardcode
+  bsf->par_out->format = 0; //AV_PIX_FMT_YUV420P; //TODO fix hardcode
+  bsf->par_out->bit_rate = 3000000;
+  bsf->par_out->sample_aspect_ratio.den = 1;
+  bsf->par_out->sample_aspect_ratio.num = 1;
+  bsf->par_out->profile = 578;
+  bsf->par_out->level = 40;
+
+  //set H264 time_base
+  //bsf->time_base_out.num = 1;
+  //bsf->time_base_out.den = 60;
+
 
   return 0;
 }
@@ -201,6 +375,7 @@ static const enum AVCodecID codec_ids[] = {
 
 const AVBitStreamFilter ff_mjpeg_demux_h264_bsf = {
     .name      = "mjpeg_demux_h264",
+    .priv_data_size = sizeof(H264DemuxContext),
     .init      = &mjpeg_demux_h264_init,
     .filter    = &mjpeg_demux_h264,
     .codec_ids = codec_ids,

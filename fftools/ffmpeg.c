@@ -3048,6 +3048,11 @@ static int init_output_bsfs(OutputStream *ost)
 
     ost->st->time_base = ctx->time_base_out;
 
+    //hacks
+    ost->st->codec->time_base = ctx->time_base_out;
+    ost->st->sample_aspect_ratio.num = ctx->par_out->sample_aspect_ratio.num;
+    ost->st->sample_aspect_ratio.den = ctx->par_out->sample_aspect_ratio.den;
+
     return 0;
 }
 
