@@ -192,9 +192,11 @@ static int mjpeg_demux_h264(AVBSFContext *ctx, AVPacket *out)
         spl = sp + 2; //exclude APP4 marker
         break;
       }
+    }
 
-//      av_log(ctx, AV_LOG_ERROR, "could not find APP4 marker in bitstream\n");
-//goto fail
+    if (spl == NULL) {
+      av_log(ctx, AV_LOG_ERROR, "could not find APP4 marker in bitstream\n");
+      goto fail;
     }
 
     /*(in big endian)
